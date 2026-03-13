@@ -1,14 +1,11 @@
 """DA3 Streaming node — Chunked depth processing with Sim(3) alignment for long videos."""
 import logging
-import time
 from fractions import Fraction
-from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 import comfy.model_management as mm
-import folder_paths
 from comfy.utils import ProgressBar
 from comfy_api.latest import io
 
@@ -24,8 +21,7 @@ logger = logging.getLogger("DA3Streaming")
 class DepthAnythingV3_Streaming(io.ComfyNode):
     """Process long video sequences with chunked DA3 inference and Sim(3) alignment.
 
-    Accepts VIDEO input, saves per-frame NPZ data to disk, and returns a
-    grayscale depth VIDEO plus the NPZ folder path.
+    Accepts VIDEO input, produces depth VIDEO, NPZ payload, and optional PLY pointcloud.
     """
 
     @classmethod
@@ -44,8 +40,8 @@ class DepthAnythingV3_Streaming(io.ComfyNode):
                 "**Memory:** VRAM bounded to ~1 chunk at a time. Per-frame results saved to NPZ files on disk.\n\n"
                 "**Outputs:**\n"
                 "- depth_video: Grayscale depth visualization (connect to SaveVideo)\n"
-                "- npz_folder: Path to folder with per-frame .npz files (depth, conf, intrinsics, extrinsics)\n"
-                "- pointcloud_path: PLY file path (if save_pointcloud enabled)\n\n"
+                "- npz_data: NPZ payload with per-frame arrays (depth, conf, intrinsics, extrinsics) — connect to SaveNPZ\n"
+                "- pointcloud_ply: PLY payload (if save_pointcloud enabled) — connect to SavePLY\n\n"
                 "**Loop closure:** Connect a \"Load SALAD Model\" node to the salad_model input to enable automatic loop closure detection.",
             inputs=[
                 io.Custom("DA3MODEL").Input("da3_model"),
@@ -74,8 +70,8 @@ class DepthAnythingV3_Streaming(io.ComfyNode):
             ],
             outputs=[
                 io.Video.Output(display_name="depth_video"),
-                io.String.Output(display_name="npz_folder"),
-                io.String.Output(display_name="pointcloud_path"),
+                io.Npz.Output(display_name="npz_data"),
+                io.Ply.Output(display_name="pointcloud_ply"),
             ],
         )
 
@@ -241,15 +237,14 @@ class DepthAnythingV3_Streaming(io.ComfyNode):
         result = pipeline.run(normalized_images, pbar=pbar,
                               salad_model=salad_nn_model, video_frames=images)
 
-        # --- Save per-frame NPZ files ---
-        output_dir = Path(folder_paths.get_output_directory())
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        npz_dir = output_dir / "da3_streaming" / timestamp
-        npz_dir.mkdir(parents=True, exist_ok=True)
+        # --- Build per-frame NPZ payload ---
+        from io import BytesIO
+        from comfy_api.latest._util.npz_types import NPZ
 
         raw_depth = result.depth  # [N, H, W] CPU tensor
         raw_conf = result.conf    # [N, H, W] CPU tensor
 
+        npz_frames = []
         for i in range(num_views):
             frame_data = {
                 "depth": raw_depth[i].numpy().astype(np.float32),
@@ -259,9 +254,12 @@ class DepthAnythingV3_Streaming(io.ComfyNode):
                 frame_data["intrinsics"] = result.intrinsics[i].astype(np.float32) if isinstance(result.intrinsics, np.ndarray) else result.intrinsics[i].cpu().numpy().astype(np.float32)
             if result.extrinsics is not None:
                 frame_data["extrinsics"] = result.extrinsics[i].astype(np.float32) if isinstance(result.extrinsics, np.ndarray) else result.extrinsics[i].cpu().numpy().astype(np.float32)
-            np.savez_compressed(npz_dir / f"frame_{i:06d}.npz", **frame_data)
+            buf = BytesIO()
+            np.savez_compressed(buf, **frame_data)
+            npz_frames.append(buf.getvalue())
 
-        logger.info(f"Saved {num_views} NPZ files to {npz_dir}")
+        npz_payload = NPZ(frames=npz_frames)
+        logger.info(f"Built NPZ payload ({num_views} frames)")
 
         # --- Build depth VIDEO (all on CPU to avoid OOM) ---
         depth = raw_depth.float()
@@ -299,6 +297,12 @@ class DepthAnythingV3_Streaming(io.ComfyNode):
             frame_rate=Fraction(fps) if not isinstance(fps, Fraction) else fps,
         ))
 
-        pointcloud_path = result.pointcloud_path or ""
+        # Read pipeline scratch file back as PLY bytes (if pointcloud was saved)
+        pointcloud_ply = None
+        if result.pointcloud_path:
+            from comfy_api.latest._util.ply_types import PLY
+            with open(result.pointcloud_path, "rb") as f:
+                pointcloud_ply = PLY(raw_data=f.read())
+            logger.info(f"Read pointcloud PLY ({len(pointcloud_ply.raw_data)} bytes) from pipeline scratch")
 
-        return io.NodeOutput(depth_video, str(npz_dir), pointcloud_path)
+        return io.NodeOutput(depth_video, npz_payload, pointcloud_ply)

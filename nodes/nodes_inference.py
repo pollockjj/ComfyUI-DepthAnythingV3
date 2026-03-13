@@ -9,7 +9,7 @@ from .utils import (
     IMAGENET_MEAN, IMAGENET_STD, DEFAULT_PATCH_SIZE,
     format_camera_params, process_tensor_to_image, process_tensor_to_mask,
     resize_to_patch_multiple, logger, check_model_capabilities,
-    imagenet_normalize, save_gaussians_to_ply,
+    imagenet_normalize, build_gaussian_ply,
 )
 from .normalization import (
     apply_edge_antialiasing,
@@ -68,7 +68,7 @@ Connect only the outputs you need - unused outputs are simply ignored.""",
                 io.Mask.Output(display_name="sky_mask"),
                 io.Custom("EXTRINSICS").Output(display_name="extrinsics"),
                 io.Custom("INTRINSICS").Output(display_name="intrinsics"),
-                io.String.Output(display_name="gaussian_ply_path"),
+                io.Ply.Output(display_name="gaussian_ply"),
             ],
         )
 
@@ -329,28 +329,21 @@ Connect only the outputs you need - unused outputs are simply ignored.""",
         else:
             intrinsics_tensor = torch.eye(4).unsqueeze(0).expand(len(depth_out), -1, -1)
 
-        # Save Gaussians to PLY file if available (Giant model only)
-        gaussian_ply_path = ""
+        # Build Gaussian PLY payload if available (Giant model only)
+        gaussian_ply = None
         if gaussians_list:
-            import folder_paths
-            from pathlib import Path
-            output_dir = Path(folder_paths.get_output_directory())
-            # Use the first batch item's Gaussians and depth for pruning
             gs, raw_depth = gaussians_list[0]
-            # Raw depth shape: (1, 1, H, W) -> squeeze to (1, H, W) for pruning
             depth_for_pruning = raw_depth.squeeze(0) if raw_depth.dim() == 4 else raw_depth
-            # Get extrinsics for world-to-camera transform (preserves scale/position relationship)
             gs_extrinsics = extrinsics_list[0] if extrinsics_list and extrinsics_list[0] is not None else None
-            filepath = output_dir / "gaussians_worldspace_0000.ply"
-            gaussian_ply_path = save_gaussians_to_ply(
-                gs, filepath, depth=depth_for_pruning,
+            gaussian_ply = build_gaussian_ply(
+                gs, depth=depth_for_pruning,
                 extrinsics=gs_extrinsics,
                 shift_and_scale=False, save_sh_dc_only=False,
                 prune_border=True, prune_depth_percent=0.9,
             )
 
         return io.NodeOutput(depth_final, conf_final, rgb_resized, ray_origin_final, ray_dir_final,
-                extrinsics_str, intrinsics_str, sky_final, extrinsics_tensor, intrinsics_tensor, gaussian_ply_path)
+                extrinsics_str, intrinsics_str, sky_final, extrinsics_tensor, intrinsics_tensor, gaussian_ply)
 
     @staticmethod
     def _process_ray_to_image(ray_list, orig_H, orig_W, normalize=True, skip_resize=False):

@@ -5,7 +5,6 @@ from contextlib import nullcontext
 
 import comfy.model_management as mm
 from comfy.utils import ProgressBar
-import folder_paths
 from comfy_api.latest import io
 
 from .utils import (
@@ -61,6 +60,7 @@ Output POINTCLOUD contains:
             ],
             outputs=[
                 io.Custom("POINTCLOUD").Output(display_name="pointcloud"),
+                io.Ply.Output(display_name="ply"),
             ],
         )
 
@@ -201,6 +201,7 @@ Output POINTCLOUD contains:
 
         B = depth_raw.shape[0]
         point_clouds = []
+        ply_payloads = []
 
         for b in range(B):
             cls._check_consistency(
@@ -344,153 +345,25 @@ Output POINTCLOUD contains:
                         f"Y[{points_3d[:, 1].min():.4f}, {points_3d[:, 1].max():.4f}], "
                         f"Z[{points_3d[:, 2].min():.4f}, {points_3d[:, 2].max():.4f}]")
 
-            # Create point cloud dict
-            pc = {
-                'points': points_3d.cpu().numpy(),
-                'confidence': conf_flat.cpu().numpy(),
-                'colors': colors_flat.cpu().numpy() if colors_flat is not None else None,
-            }
+            points_np = points_3d.cpu().numpy()
+            conf_np = conf_flat.cpu().numpy()
+            colors_np = colors_flat.cpu().numpy() if colors_flat is not None else None
 
+            pc = {
+                'points': points_np,
+                'confidence': conf_np,
+                'colors': colors_np,
+            }
             point_clouds.append(pc)
 
-        # Return as NodeOutput containing list of point clouds
-        return io.NodeOutput(point_clouds)
+            from comfy_api.latest._util.ply_types import PLY
+            ply_payloads.append(PLY(points=points_np, colors=colors_np, confidence=conf_np))
 
-
-class DA3_SavePointCloud(io.ComfyNode):
-    @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="DA3_SavePointCloud",
-            display_name="DA3 Save Point Cloud",
-            category="DepthAnythingV3",
-            is_output_node=True,
-            description="""
-Save point cloud to PLY file.
-
-Always saves:
-- Original RGB colors (if available)
-- view_id as custom property (if available from multi-view fusion)
-- Confidence values (if available)
-
-Use DA3 Preview Point Cloud to visualize with different color modes.
-
-Output directory: ComfyUI/output/
-Returns file path for use with ComfyUI 3D viewer.
-""",
-            inputs=[
-                io.Custom("POINTCLOUD").Input("pointcloud"),
-                io.String.Input("filename_prefix", default="pointcloud"),
-            ],
-            outputs=[
-                io.String.Output(display_name="file_path"),
-            ],
-        )
-
-    @staticmethod
-    def _write_ply(filepath, points, colors=None, confidence=None, view_id=None):
-        """Write point cloud to PLY file."""
-        import numpy as np
-
-        N = len(points)
-
-        # Prepare header
-        header = [
-            "ply",
-            "format ascii 1.0",
-            f"element vertex {N}",
-            "property float x",
-            "property float y",
-            "property float z",
-        ]
-
-        if colors is not None:
-            header.extend([
-                "property uchar red",
-                "property uchar green",
-                "property uchar blue",
-            ])
-
-        if confidence is not None:
-            header.append("property float confidence")
-
-        if view_id is not None:
-            header.append("property int view_id")
-
-        header.append("end_header")
-
-        # Write file
-        with open(filepath, 'w') as f:
-            # Write header
-            f.write('\n'.join(header) + '\n')
-
-            # Write points
-            for i in range(N):
-                x, y, z = points[i]
-                line = f"{x} {y} {z}"
-
-                if colors is not None:
-                    r, g, b = (colors[i] * 255).astype(np.uint8)
-                    line += f" {r} {g} {b}"
-
-                if confidence is not None:
-                    line += f" {confidence[i]}"
-
-                if view_id is not None:
-                    line += f" {int(view_id[i])}"
-
-                f.write(line + '\n')
-
-    @classmethod
-    def execute(cls, pointcloud, filename_prefix):
-        """Save point cloud(s) to PLY file. Always saves view_id if available."""
-        import numpy as np
-        from pathlib import Path
-
-        # Get output directory
-        output_dir = folder_paths.get_output_directory()
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        results = []
-        file_paths = []
-        for idx, pc in enumerate(pointcloud):
-            points = pc['points']
-            confidence = pc.get('confidence', None)
-            colors = pc.get('colors', None)
-            view_id = pc.get('view_id', None)
-
-            # Generate filename
-            filename = f"{filename_prefix}_{idx:04d}.ply"
-            filepath = output_path / filename
-
-            # Ensure parent directory exists (for subfolder prefixes like "subfolder/pointcloud")
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-
-            # Write PLY file (saves original RGB + view_id as custom property)
-            cls._write_ply(filepath, points, colors, confidence, view_id)
-
-            # Extract subfolder from filename if present
-            subfolder = str(Path(filename).parent) if Path(filename).parent != Path(".") else ""
-            results.append({
-                "filename": Path(filename).name,
-                "subfolder": subfolder,
-                "type": "output"
-            })
-            file_paths.append(str(filepath))
-            logger.info(f"Saved point cloud to: {filepath}")
-
-        # Return first file path (or all paths joined by newline if multiple)
-        output_file_path = file_paths[0] if len(file_paths) == 1 else "\n".join(file_paths)
-
-        return io.NodeOutput(output_file_path, ui={
-            "pointclouds": results,
-            "file_path": [output_file_path]
-        })
+        return io.NodeOutput(point_clouds, ply_payloads[0] if len(ply_payloads) == 1 else ply_payloads)
 
 
 class DA3_FilterGaussians(io.ComfyNode):
-    """Load raw Gaussians PLY, apply filters, and save filtered PLY."""
+    """Filter 3D Gaussians: pure PLY → PLY transform (no file I/O)."""
 
     @classmethod
     def define_schema(cls):
@@ -498,22 +371,20 @@ class DA3_FilterGaussians(io.ComfyNode):
             node_id="DA3_FilterGaussians",
             display_name="DA3 Filter Gaussians",
             category="DepthAnythingV3",
-            is_output_node=True,
             description="""
-Filter 3D Gaussians from a PLY file and save filtered result.
+Filter 3D Gaussians from a PLY payload.
 
-Connect 'gaussian_ply_path' from DepthAnything_V3 node.
+Connect 'gaussian_ply' from DepthAnything_V3 or DepthAnythingV3_MultiView node.
 
 Filtering options:
 - filter_sky: Remove Gaussians in sky regions (requires sky_mask from DepthAnything_V3)
 - depth_prune_percent: Keep only closest X% of Gaussians by depth (0.9 = keep 90%)
 - opacity_threshold: Remove low-opacity Gaussians
 
-Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS viewers)
+Output: Filtered PLY payload (connect to SavePLY for file output)
 """,
             inputs=[
-                io.String.Input("gaussian_ply_path", force_input=True),
-                io.String.Input("filename_prefix", default="gaussians_filtered"),
+                io.Ply.Input("gaussian_ply"),
                 io.Mask.Input("sky_mask", optional=True),
                 io.Boolean.Input("filter_sky", optional=True, default=True,
                                  tooltip="Filter out Gaussians in sky regions using sky_mask"),
@@ -523,21 +394,16 @@ Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS v
                                tooltip="Remove Gaussians with opacity below this threshold"),
             ],
             outputs=[
-                io.String.Output(display_name="ply_path"),
+                io.Ply.Output(display_name="filtered_ply"),
             ],
         )
 
     @classmethod
-    def execute(cls, gaussian_ply_path, filename_prefix, sky_mask=None, filter_sky=True,
+    def execute(cls, gaussian_ply, sky_mask=None, filter_sky=True,
                 depth_prune_percent=0.9, opacity_threshold=0.0):
-        """Load, filter, and save Gaussians."""
+        """Filter Gaussians: PLY in, PLY out."""
         import numpy as np
-        from pathlib import Path
-
-        if not gaussian_ply_path or gaussian_ply_path.strip() == "":
-            raise ValueError(
-                "No Gaussian PLY path provided. Make sure you're using the Giant model."
-            )
+        from io import BytesIO
 
         try:
             from plyfile import PlyData, PlyElement
@@ -546,17 +412,12 @@ Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS v
                 "plyfile is required. Install with: pip install plyfile"
             )
 
-        # Load the raw PLY
-        ply_path = Path(gaussian_ply_path)
-        if not ply_path.exists():
-            raise ValueError(f"PLY file not found: {ply_path}")
-
-        logger.info(f"Loading Gaussians from: {ply_path}")
-        plydata = PlyData.read(str(ply_path))
+        # Parse PLY from raw bytes
+        plydata = PlyData.read(BytesIO(gaussian_ply.raw_data))
         vertices = plydata['vertex'].data
 
         N = len(vertices)
-        logger.info(f"Loaded {N} Gaussians")
+        logger.info(f"Loaded {N} Gaussians from PLY payload")
 
         # Extract data
         xyz = np.stack([vertices['x'], vertices['y'], vertices['z']], axis=1)
@@ -574,7 +435,6 @@ Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS v
             if len(sky_flat) >= N:
                 sky_flat = sky_flat[:N]
             else:
-                # Repeat to match
                 repeats = (N // len(sky_flat)) + 1
                 sky_flat = np.tile(sky_flat, repeats)[:N]
 
@@ -582,10 +442,8 @@ Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS v
             valid_mask = valid_mask & sky_filter
             logger.info(f"After sky filtering: {valid_mask.sum()} / {N} Gaussians")
 
-        # Apply opacity threshold
-        # Note: PLY stores opacity in LOGIT space, convert back for comparison
+        # Apply opacity threshold (PLY stores opacity in logit space)
         if opacity_threshold > 0:
-            # Convert logit to actual opacity: sigmoid(x) = 1 / (1 + exp(-x))
             actual_opacity = 1.0 / (1.0 + np.exp(-opacity))
             opacity_filter = actual_opacity >= opacity_threshold
             valid_mask = valid_mask & opacity_filter
@@ -593,7 +451,7 @@ Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS v
 
         # Apply depth percentile pruning
         if depth_prune_percent < 1.0:
-            valid_depths = xyz[valid_mask, 2]  # Z coordinate
+            valid_depths = xyz[valid_mask, 2]
             if len(valid_depths) > 0:
                 threshold = np.percentile(valid_depths, depth_prune_percent * 100)
                 depth_filter = xyz[:, 2] <= threshold
@@ -607,24 +465,15 @@ Output: Path to filtered PLY file (compatible with SuperSplat, gsplat.js, 3DGS v
         if N_filtered == 0:
             raise ValueError("No Gaussians remaining after filtering")
 
-        logger.info(f"Saving {N_filtered} filtered Gaussians")
+        logger.info(f"Filtered Gaussians: {N} -> {N_filtered}")
 
-        # Save filtered PLY
-        output_dir = Path(folder_paths.get_output_directory())
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Build filtered PLY bytes
+        from comfy_api.latest._util.ply_types import PLY
 
         el = PlyElement.describe(filtered_vertices, 'vertex')
-        filename = f"{filename_prefix}_0000.ply"
-        filepath = output_dir / filename
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        PlyData([el]).write(str(filepath))
-
-        logger.info(f"Saved filtered Gaussians to: {filepath}")
-
-        subfolder = str(Path(filename).parent) if Path(filename).parent != Path(".") else ""
-        return io.NodeOutput(str(filepath), ui={
-            "gaussians": [{"filename": Path(filename).name, "subfolder": subfolder, "type": "output"}]
-        })
+        buf = BytesIO()
+        PlyData([el]).write(buf)
+        return io.NodeOutput(PLY(raw_data=buf.getvalue()))
 
 
 class DA3_ToMesh(io.ComfyNode):
@@ -636,7 +485,6 @@ class DA3_ToMesh(io.ComfyNode):
             node_id="DA3_ToMesh",
             display_name="DA3 to Mesh",
             category="DepthAnythingV3",
-            is_output_node=True,
             description="""
 Convert DA3 depth map to textured 3D mesh (GLB format).
 
@@ -654,9 +502,8 @@ Parameters:
 - confidence_threshold: Filter vertices below this confidence
 - depth_edge_threshold: Skip triangles across large depth jumps (prevents artifacts)
 - downsample: Reduce mesh density (higher = fewer triangles, faster)
-- filename_prefix: Output filename prefix
 
-Output: GLB file path
+Output: File3DGLB payload (connect to SaveGLB to save)
 """,
             inputs=[
                 io.Image.Input("depth_raw"),
@@ -672,14 +519,13 @@ Output: GLB file path
                              tooltip="Downsample depth map before meshing (use 1 with target_faces for best quality)"),
                 io.Int.Input("target_faces", optional=True, default=100000, min=0, max=10000000, step=10000,
                              tooltip="Target face count after decimation (0 = no decimation). Adaptive: keeps detail at edges, simplifies flat areas."),
-                io.String.Input("filename_prefix", optional=True, default="mesh"),
                 io.Boolean.Input("allow_around_1", optional=True, default=False,
                                  tooltip="If your depth values have a max close to 1, you are likely feeding normalized depth instead of real/metric depth. This node requires raw metric depth (typical values 0.1–200+). Disable this check only if your scene truly has max depth ~1 meter."),
                 io.Boolean.Input("use_draco_compression", optional=True, default=False,
                                  tooltip="Use Draco compression for smaller file size (note: ComfyUI's built-in 3D viewer does not support Draco-compressed meshes)"),
             ],
             outputs=[
-                io.String.Output(display_name="file_path"),
+                io.File3DGLB.Output(display_name="mesh_glb"),
             ],
         )
 
@@ -856,8 +702,8 @@ Output: GLB file path
         return new_verts, new_faces, None, new_uvs
 
     @classmethod
-    def _export_to_glb(cls, filepath, vertices, faces, vertex_colors, uvs, normals, texture_image=None, use_draco_compression=True):
-        """Export mesh to GLB format using trimesh."""
+    def _export_to_glb_bytes(cls, vertices, faces, vertex_colors, uvs, normals, texture_image=None, use_draco_compression=True):
+        """Export mesh to GLB format in-memory using trimesh. Returns bytes."""
         try:
             import trimesh
         except ImportError:
@@ -903,23 +749,22 @@ Output: GLB file path
                 material=material,
             )
 
-        # Export to GLB with optional Draco compression
-        # Note: Draco compression requires DracoPy (pip install DracoPy)
+        # Export to GLB in-memory
         if use_draco_compression:
             try:
-                mesh.export(filepath, file_type='glb', extension_draco=True)
+                glb_data = mesh.export(file_type='glb', extension_draco=True)
             except Exception as e:
                 logger.warning(f"Draco compression failed ({e}), exporting uncompressed")
-                mesh.export(filepath, file_type='glb')
+                glb_data = mesh.export(file_type='glb')
         else:
-            mesh.export(filepath, file_type='glb')
+            glb_data = mesh.export(file_type='glb')
 
         # Post-process GLB to enable double-sided + unlit rendering
-        cls._postprocess_glb_materials(filepath)
+        return cls._postprocess_glb_materials_bytes(glb_data)
 
     @staticmethod
-    def _postprocess_glb_materials(filepath):
-        """Modify GLB materials: double-sided + unlit (true texture colors, no lighting)."""
+    def _postprocess_glb_materials_bytes(glb_data):
+        """Modify GLB materials in-memory: double-sided + unlit. Returns bytes."""
         try:
             import pygltflib
         except ImportError:
@@ -928,10 +773,10 @@ Output: GLB file path
                 "Install with: pip install pygltflib. "
                 "Mesh may appear dark or single-sided."
             )
-            return
+            return glb_data
 
         try:
-            gltf = pygltflib.GLTF2().load(filepath)
+            gltf = pygltflib.GLTF2.load_from_bytes(glb_data)
 
             # Ensure extensionsUsed list exists
             if gltf.extensionsUsed is None:
@@ -960,17 +805,18 @@ Output: GLB file path
                         for primitive in mesh.primitives:
                             primitive.material = 0
 
-            gltf.save(filepath)
-            logger.debug(f"Post-processed materials in {filepath}")
+            return b"".join(gltf.save_to_bytes())
 
         except Exception as e:
             logger.warning(f"Failed to post-process materials: {e}")
+            return glb_data
 
     @classmethod
     def execute(cls, depth_raw, confidence, intrinsics=None, sky_mask=None, source_image=None,
-                confidence_threshold=0.1, depth_edge_threshold=0.1, downsample=1, target_faces=100000, filename_prefix="mesh", allow_around_1=False, use_draco_compression=False):
-        """Convert depth map to mesh and save as GLB."""
-        from pathlib import Path
+                confidence_threshold=0.1, depth_edge_threshold=0.1, downsample=1, target_faces=100000, allow_around_1=False, use_draco_compression=False):
+        """Convert depth map to mesh, return as in-memory File3DGLB payload."""
+        from io import BytesIO
+        from comfy_api.latest._util.geometry_types import File3D
 
         # Validate depth
         max_depth = depth_raw.max().item()
@@ -1083,21 +929,8 @@ Output: GLB file path
             normals = np.divide(normals, norms, where=norms > 1e-10)
             logger.info(f"Decimated mesh: {len(vertices)} vertices, {len(faces)} faces")
 
-        # Get output directory
-        output_dir = folder_paths.get_output_directory()
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        # Generate filename
-        filename = f"{filename_prefix}_0000.glb"
-        filepath = output_path / filename
-
-        # Ensure parent directory exists (for subfolder prefixes like "subfolder/mesh")
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-
-        # Export to GLB
-        cls._export_to_glb(
-            str(filepath),
+        # Export to GLB in-memory
+        glb_bytes = cls._export_to_glb_bytes(
             vertices,
             faces,
             vertex_colors,
@@ -1107,10 +940,7 @@ Output: GLB file path
             use_draco_compression=use_draco_compression
         )
 
-        logger.info(f"Saved mesh to: {filepath}")
+        logger.info(f"Created in-memory GLB: {len(glb_bytes)} bytes")
 
-        # Extract subfolder from filename if present
-        subfolder = str(Path(filename).parent) if Path(filename).parent != Path(".") else ""
-        return io.NodeOutput(str(filepath), ui={
-            "meshes": [{"filename": Path(filename).name, "subfolder": subfolder, "type": "output"}]
-        })
+        file3d = File3D(BytesIO(glb_bytes), file_format="glb")
+        return io.NodeOutput(file3d)

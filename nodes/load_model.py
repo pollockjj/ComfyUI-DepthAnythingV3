@@ -29,7 +29,6 @@ def _get_da3_model_list():
     """Get combined model list: known HuggingFace models + locally-placed files."""
     local_models = folder_paths.get_filename_list("depth_anything_v3")
     known_models = list(MODEL_REPOS.keys())
-    # Known models first, then any extra local files, deduplicated
     return list(dict.fromkeys(known_models + local_models))
 
 

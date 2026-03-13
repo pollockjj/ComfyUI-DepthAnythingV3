@@ -240,17 +240,16 @@ def resize_to_patch_multiple(images_pt, patch_size=DEFAULT_PATCH_SIZE, method="r
     return images_pt, orig_H, orig_W
 
 
-def save_gaussians_to_ply(gaussians, save_path, depth=None, extrinsics=None,
-                           shift_and_scale=False, save_sh_dc_only=True,
-                           prune_border=True, prune_depth_percent=0.9):
-    """Save Gaussians to PLY file in standard 3DGS format.
+def build_gaussian_ply(gaussians, depth=None, extrinsics=None,
+                       shift_and_scale=False, save_sh_dc_only=True,
+                       prune_border=True, prune_depth_percent=0.9):
+    """Build Gaussian PLY payload in standard 3DGS binary format.
 
-    Ported from original DA3 gsply_helpers.export_ply + save_gaussian_ply.
+    Returns a PLY object with raw binary data (no file write).
 
     Args:
         gaussians: Object with .means, .scales, .rotations, .harmonics, .opacities
                    All tensors shape (B, N, ...) where B=1, N = V*H*W
-        save_path: Output PLY file path (str or Path)
         depth: Optional depth tensor (V, H, W) or (V, H, W, 1) for spatial pruning.
                Provides shape info for border pruning + depth values for far pruning.
         extrinsics: Optional world-to-camera extrinsics tensor (4x4). If provided,
@@ -262,14 +261,13 @@ def save_gaussians_to_ply(gaussians, save_path, depth=None, extrinsics=None,
         prune_depth_percent: Keep closest N% by depth (0.9 = keep 90%). Set 1.0 to skip.
     """
     import numpy as np
-    from pathlib import Path
 
     try:
         from plyfile import PlyData, PlyElement
     except ImportError:
-        logger.warning("plyfile not installed - cannot save Gaussians to PLY. "
+        logger.warning("plyfile not installed - cannot build Gaussian PLY. "
                        "Install with: pip install plyfile")
-        return ""
+        return None
 
     # Extract tensors from Gaussians object (handle both object and dict access)
     if isinstance(gaussians, dict):
@@ -431,8 +429,10 @@ def save_gaussians_to_ply(gaussians, save_path, depth=None, extrinsics=None,
     elements = np.empty(N, dtype=dtype_full)
     elements[:] = list(map(tuple, attributes))
 
-    save_path = Path(save_path)
-    save_path.parent.mkdir(exist_ok=True, parents=True)
-    PlyData([PlyElement.describe(elements, "vertex")]).write(str(save_path))
-    logger.info(f"Saved Gaussians ({N} splats, {len(attr_names)} properties) to: {save_path}")
-    return str(save_path)
+    from io import BytesIO
+    from comfy_api.latest._util.ply_types import PLY
+
+    buf = BytesIO()
+    PlyData([PlyElement.describe(elements, "vertex")]).write(buf)
+    logger.info(f"Built Gaussian PLY payload ({N} splats, {len(attr_names)} properties)")
+    return PLY(raw_data=buf.getvalue())

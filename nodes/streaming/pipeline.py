@@ -339,13 +339,13 @@ class StreamingPipeline:
             raise ValueError("Model output does not contain depth tensor")
 
         # Squeeze batch dim: [1, C, H, W] -> [C, H, W]
-        depth = depth.squeeze(0).cpu().numpy()
-        conf = conf.squeeze(0).cpu().numpy() if conf is not None else np.ones_like(depth)
-        sky = sky.squeeze(0).cpu().numpy() if sky is not None else np.zeros_like(depth)
+        depth = depth.detach().squeeze(0).cpu().numpy()
+        conf = conf.detach().squeeze(0).cpu().numpy() if conf is not None else np.ones_like(depth)
+        sky = sky.detach().squeeze(0).cpu().numpy() if sky is not None else np.zeros_like(depth)
 
         # Handle extrinsics/intrinsics shapes
         if extr is not None:
-            extr = extr.squeeze(0).cpu().numpy()  # [C, 3, 4] or [C, 4, 4]
+            extr = extr.detach().squeeze(0).cpu().numpy()  # [C, 3, 4] or [C, 4, 4]
             if extr.shape[-2] == 4 and extr.shape[-1] == 4:
                 extr = extr[:, :3, :]  # [C, 3, 4]
         else:
@@ -356,7 +356,7 @@ class StreamingPipeline:
                 extr[j, :3, :3] = np.eye(3)
 
         if intr is not None:
-            intr = intr.squeeze(0).cpu().numpy()  # [C, 3, 3]
+            intr = intr.detach().squeeze(0).cpu().numpy()  # [C, 3, 3]
         else:
             C, H, W = depth.shape
             intr = np.zeros((C, 3, 3), dtype=np.float32)

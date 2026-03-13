@@ -12,7 +12,6 @@ from .nodes_inference import DepthAnything_V3
 
 from .nodes_3d import (
     DA3_ToPointCloud,
-    DA3_SavePointCloud,
     DA3_FilterGaussians,
     DA3_ToMesh,
 )
@@ -46,7 +45,6 @@ NODE_CLASSES = [
     DepthAnythingV3_Streaming,
     # 3D
     DA3_ToPointCloud,
-    DA3_SavePointCloud,
     DA3_FilterGaussians,
     DA3_ToMesh,
     # Camera

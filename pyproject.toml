@@ -3,6 +3,19 @@ name = "ComfyUI-DepthAnythingV3"
 description = "ComfyUI nodes to use Depth Anything V3, great depth estimation model from ByteDance."
 version = "0.1.2"
 license = {file = "LICENSE"}
+dependencies = [
+    "huggingface_hub",
+    "accelerate>=0.25.0",
+    "einops>=0.7.0,<1.0.0",
+    "omegaconf>=2.3.0,<3.0.0",
+    "safetensors>=0.4.0,<1.0.0",
+    "addict",
+    "trimesh",
+    "plyfile>=1.0.0",
+    "e3nn>=0.5.0",
+    "pygltflib",
+    "sageattention",
+]
 
 [project.urls]
 Repository = "https://github.com/PozzettiAndrea/ComfyUI-DepthAnythingV3"

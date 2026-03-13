@@ -10,7 +10,7 @@ from .utils import (
     IMAGENET_MEAN, IMAGENET_STD, DEFAULT_PATCH_SIZE,
     format_camera_params, process_tensor_to_image, process_tensor_to_mask,
     resize_to_patch_multiple, logger, check_model_capabilities,
-    imagenet_normalize, save_gaussians_to_ply,
+    imagenet_normalize, build_gaussian_ply,
 )
 from .normalization import (
     apply_standard_normalization,
@@ -56,7 +56,7 @@ All images must have the same resolution. Higher N = more VRAM but better consis
                 io.String.Output(display_name="intrinsics"),
                 io.Mask.Output(display_name="sky_mask"),
                 io.Image.Output(display_name="resized_rgb_image"),
-                io.String.Output(display_name="gaussian_ply_path"),
+                io.Ply.Output(display_name="gaussian_ply"),
             ],
         )
 
@@ -349,23 +349,18 @@ All images must have the same resolution. Higher N = more VRAM but better consis
         extrinsics_str = format_camera_params(extrinsics_list, "extrinsics")
         intrinsics_str = format_camera_params(intrinsics_list, "intrinsics")
 
-        # Save Gaussians to PLY if available (Giant model only)
-        gaussian_ply_path = ""
+        # Build Gaussian PLY payload if available (Giant model only)
+        gaussian_ply = None
         if gaussians is not None:
-            import folder_paths
-            from pathlib import Path
-            output_dir = Path(folder_paths.get_output_directory())
-            # Get extrinsics for world-to-camera transform (preserves scale/position relationship)
             gs_extrinsics = extrinsics_list[0] if extrinsics_list and extrinsics_list[0] is not None else None
-            filepath = output_dir / "gaussians_mv_worldspace_0000.ply"
-            gaussian_ply_path = save_gaussians_to_ply(
-                gaussians, filepath, depth=raw_depth_for_gs,
+            gaussian_ply = build_gaussian_ply(
+                gaussians, depth=raw_depth_for_gs,
                 extrinsics=gs_extrinsics,
                 shift_and_scale=False, save_sh_dc_only=False,
                 prune_border=True, prune_depth_percent=0.9,
             )
 
-        return io.NodeOutput(depth_out, conf_out, ray_origin_out, ray_dir_out, extrinsics_str, intrinsics_str, sky_out, rgb_out, gaussian_ply_path)
+        return io.NodeOutput(depth_out, conf_out, ray_origin_out, ray_dir_out, extrinsics_str, intrinsics_str, sky_out, rgb_out, gaussian_ply)
 
 
 
@@ -402,6 +397,7 @@ Requires Main series or Nested model (with camera pose prediction).""",
             ],
             outputs=[
                 io.Custom("POINTCLOUD").Output(display_name="pointcloud"),
+                io.Ply.Output(display_name="ply"),
             ],
         )
 
@@ -809,7 +805,16 @@ Requires Main series or Nested model (with camera pose prediction).""",
             "view_id": combined_view_ids.numpy(),
         }
 
-        return io.NodeOutput([pointcloud])
+        from comfy_api.latest._util.ply_types import PLY
+
+        ply_payload = PLY(
+            points=pointcloud["points"],
+            colors=pointcloud["colors"],
+            confidence=pointcloud["confidence"],
+            view_id=pointcloud["view_id"],
+        )
+
+        return io.NodeOutput([pointcloud], ply_payload)
 
     @staticmethod
     def _filter_outliers(points, colors, confidence, view_id, percentage):
@@ -834,5 +839,4 @@ Requires Main series or Nested model (with camera pose prediction).""",
         filtered_view_id = view_id[keep_indices]
 
         return filtered_points, filtered_colors, filtered_confidence, filtered_view_id
-
 

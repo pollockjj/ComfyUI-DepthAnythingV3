@@ -54,7 +54,7 @@ def weighted_estimate_se3_torch(source_points, target_points, weights, device=No
 
     H = weighted_src.T @ weighted_tgt
 
-    return 1.0, mu_src.cpu().numpy(), mu_tgt.cpu().numpy(), H.cpu().numpy()
+    return 1.0, mu_src.detach().cpu().numpy(), mu_tgt.detach().cpu().numpy(), H.detach().cpu().numpy()
 
 
 def weighted_estimate_sim3_torch(source_points, target_points, weights, device=None):
@@ -91,7 +91,7 @@ def weighted_estimate_sim3_torch(source_points, target_points, weights, device=N
 
     H = weighted_src.T @ weighted_tgt
 
-    return s.cpu().numpy(), mu_src.cpu().numpy(), mu_tgt.cpu().numpy(), H.cpu().numpy()
+    return s.detach().cpu().numpy(), mu_src.detach().cpu().numpy(), mu_tgt.detach().cpu().numpy(), H.detach().cpu().numpy()
 
 
 def weighted_estimate_sim3_numba_torch(source_points, target_points, weights, align_method="sim3", device=None):
@@ -109,8 +109,8 @@ def weighted_estimate_sim3_numba_torch(source_points, target_points, weights, al
     H_torch = torch.from_numpy(H).to(device).float()
     U, _, Vt = torch.linalg.svd(H_torch)
 
-    U = U.cpu().numpy()
-    Vt = Vt.cpu().numpy()
+    U = U.detach().cpu().numpy()
+    Vt = Vt.detach().cpu().numpy()
 
     R = Vt.T @ U.T
     if np.linalg.det(R) < 0:
@@ -141,7 +141,7 @@ def huber_loss_torch(r, delta, device=None):
         abs_r <= delta_torch, 0.5 * r_torch**2, delta_torch * (abs_r - 0.5 * delta_torch)
     )
 
-    return result.cpu().numpy()
+    return result.detach().cpu().numpy()
 
 
 def compute_residuals_torch(tgt, transformed, device=None):
@@ -152,7 +152,7 @@ def compute_residuals_torch(tgt, transformed, device=None):
     transformed_torch = torch.from_numpy(transformed).to(device).float()
 
     residuals = torch.sqrt(torch.sum((tgt_torch - transformed_torch) ** 2, dim=1))
-    return residuals.cpu().numpy()
+    return residuals.detach().cpu().numpy()
 
 
 def compute_huber_weights_torch(residuals, delta, device=None):
@@ -166,7 +166,7 @@ def compute_huber_weights_torch(residuals, delta, device=None):
     mask = residuals_torch > delta_torch
     weights[mask] = delta_torch / residuals_torch[mask]
 
-    return weights.cpu().numpy()
+    return weights.detach().cpu().numpy()
 
 
 def apply_transformation_torch(src, s, R, t, device=None):
@@ -179,7 +179,7 @@ def apply_transformation_torch(src, s, R, t, device=None):
     s_torch = torch.tensor(s, device=device, dtype=torch.float32)
 
     transformed = s_torch * (src_torch @ R_torch.T) + t_torch
-    return transformed.cpu().numpy()
+    return transformed.detach().cpu().numpy()
 
 
 def robust_weighted_estimate_sim3_torch(
@@ -271,7 +271,7 @@ def apply_sim3_direct_torch(point_maps, s, R, t, device=None):
     transformed = transformed_flat.reshape(b, h, w, 3)
 
     if isinstance(point_maps, np.ndarray):
-        return transformed.cpu().numpy()
+        return transformed.detach().cpu().numpy()
     return transformed
 
 
@@ -325,5 +325,5 @@ def depth_to_point_cloud_optimized_torch(depth, intrinsics, extrinsics, device=N
     point_cloud_world = world_coords_homo[..., :3]  # [N, H, W, 3]
 
     if input_is_numpy:
-        return point_cloud_world.cpu().numpy()
+        return point_cloud_world.detach().cpu().numpy()
     return point_cloud_world

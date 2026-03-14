@@ -252,13 +252,13 @@ class DepthAnythingV3_Streaming(io.ComfyNode):
 
         for i in range(num_views):
             frame_data = {
-                "depth": raw_depth[i].numpy().astype(np.float32),
-                "conf": raw_conf[i].numpy().astype(np.float32),
+                "depth": raw_depth[i].detach().numpy().astype(np.float32),
+                "conf": raw_conf[i].detach().numpy().astype(np.float32),
             }
             if result.intrinsics is not None:
-                frame_data["intrinsics"] = result.intrinsics[i].astype(np.float32) if isinstance(result.intrinsics, np.ndarray) else result.intrinsics[i].cpu().numpy().astype(np.float32)
+                frame_data["intrinsics"] = result.intrinsics[i].astype(np.float32) if isinstance(result.intrinsics, np.ndarray) else result.intrinsics[i].detach().cpu().numpy().astype(np.float32)
             if result.extrinsics is not None:
-                frame_data["extrinsics"] = result.extrinsics[i].astype(np.float32) if isinstance(result.extrinsics, np.ndarray) else result.extrinsics[i].cpu().numpy().astype(np.float32)
+                frame_data["extrinsics"] = result.extrinsics[i].astype(np.float32) if isinstance(result.extrinsics, np.ndarray) else result.extrinsics[i].detach().cpu().numpy().astype(np.float32)
             np.savez_compressed(npz_dir / f"frame_{i:06d}.npz", **frame_data)
 
         logger.info(f"Saved {num_views} NPZ files to {npz_dir}")

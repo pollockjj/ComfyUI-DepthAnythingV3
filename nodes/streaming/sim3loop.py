@@ -86,7 +86,7 @@ class Sim3LoopOptimizer:
 
     def pypose_sim3_to_numpy(self, sim3: pp.Sim3) -> Tuple[float, np.ndarray, np.ndarray]:
         """Convert pypose Sim3 to numpy s,R,t"""
-        data = sim3.data.cpu().numpy()
+        data = sim3.data.detach().cpu().numpy()
         t = data[:3]
         q = data[3:7]  # [x,y,z,w]
         s = data[7]

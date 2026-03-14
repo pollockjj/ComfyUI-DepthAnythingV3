@@ -338,7 +338,7 @@ def weighted_estimate_se3_triton(source_points, target_points, weights, device=N
         source_points, target_points, normalized_weights, mu_src, mu_tgt
     )
 
-    return 1.0, mu_src.cpu().numpy(), mu_tgt.cpu().numpy(), H.cpu().numpy()
+    return 1.0, mu_src.detach().cpu().numpy(), mu_tgt.detach().cpu().numpy(), H.detach().cpu().numpy()
 
 
 def weighted_estimate_sim3_triton(source_points, target_points, weights, device=None):
@@ -380,7 +380,7 @@ def weighted_estimate_sim3_triton(source_points, target_points, weights, device=
         torch.zeros_like(mu_tgt),
     )
 
-    return s.cpu().numpy(), mu_src.cpu().numpy(), mu_tgt.cpu().numpy(), H.cpu().numpy()
+    return s.detach().cpu().numpy(), mu_src.detach().cpu().numpy(), mu_tgt.detach().cpu().numpy(), H.detach().cpu().numpy()
 
 
 def weighted_estimate_sim3_numba_triton(
@@ -401,8 +401,8 @@ def weighted_estimate_sim3_numba_triton(
     H_torch = torch.from_numpy(H).to(device).float()
     U, _, Vt = torch.linalg.svd(H_torch)
 
-    U = U.cpu().numpy()
-    Vt = Vt.cpu().numpy()
+    U = U.detach().cpu().numpy()
+    Vt = Vt.detach().cpu().numpy()
 
     R = Vt.T @ U.T
     if np.linalg.det(R) < 0:
@@ -450,7 +450,7 @@ def robust_weighted_estimate_sim3_triton(
             src_torch, tgt_torch, s_torch, R_torch, t_torch
         )
 
-        mean_residual = torch.mean(residuals).cpu().numpy()
+        mean_residual = torch.mean(residuals).detach().cpu().numpy()
         logger.debug(f"Iter {iter}: Mean residual = {mean_residual:.6f}")
 
         huber_weights = compute_huber_weights_triton(residuals, delta)
@@ -462,7 +462,7 @@ def robust_weighted_estimate_sim3_triton(
         else:
             combined_weights = init_weights_torch / torch.sum(init_weights_torch)
 
-        combined_weights_np = combined_weights.cpu().numpy()
+        combined_weights_np = combined_weights.detach().cpu().numpy()
         s_new, R_new, t_new = weighted_estimate_sim3_numba_triton(
             src, tgt, combined_weights_np, align_method=align_method, device=device
         )
@@ -470,7 +470,7 @@ def robust_weighted_estimate_sim3_triton(
         param_change = np.abs(s_new - s) + np.linalg.norm(t_new - t)
         rot_angle = np.arccos(min(1.0, max(-1.0, (np.trace(R_new @ R.T) - 1) / 2)))
 
-        residuals_np = residuals.cpu().numpy()
+        residuals_np = residuals.detach().cpu().numpy()
         huber_loss_values = np.where(
             residuals_np <= delta, 0.5 * residuals_np**2, delta * (residuals_np - 0.5 * delta)
         )

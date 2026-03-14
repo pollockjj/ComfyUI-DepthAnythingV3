@@ -71,13 +71,13 @@ def solve_system_py(
     r = res.size(0)  # Number of edges
     n = max(ii.max().item(), jj.max().item()) + 1  # Number of nodes
 
-    res_vec = res.view(-1).numpy().astype(np.float64)
+    res_vec = res.view(-1).detach().numpy().astype(np.float64)
 
     rows, cols, data = [], [], []
-    ii_np = ii.numpy()
-    jj_np = jj.numpy()
-    J_Ginv_i_np = J_Ginv_i.numpy()
-    J_Ginv_j_np = J_Ginv_j.numpy()
+    ii_np = ii.detach().numpy()
+    jj_np = jj.detach().numpy()
+    J_Ginv_i_np = J_Ginv_i.detach().numpy()
+    J_Ginv_j_np = J_Ginv_j.detach().numpy()
 
     for x in range(r):
         i = ii_np[x]
